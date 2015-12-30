@@ -1,0 +1,6 @@
+For Boot IP GroupMe Bot Message
+http://dev.groupme.com/tutorials/bots
+http://elinux.org/RPi_Email_IP_On_Boot_Debian
+
+Bash Scripting Resources
+http://www.tldp.org/LDP/abs/html/

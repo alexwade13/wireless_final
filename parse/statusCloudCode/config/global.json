@@ -1,0 +1,14 @@
+{
+  "global": {
+    "parseVersion": "1.4.0"
+  },
+  "applications": {
+    "GymAware": {
+      "applicationId": "TXKbSqb0WSRZ6fWAf0Ebe1i9zKZffnfi5upTorIN",
+      "masterKey": "lEovyfkywcKkBqWwcUG2YXr9eiXC4UsAVeuoCdot"
+    },
+    "_default": {
+      "link": "GymAware"
+    }
+  }
+}

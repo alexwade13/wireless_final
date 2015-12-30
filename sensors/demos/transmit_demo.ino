@@ -1,0 +1,240 @@
+#include <XBee.h>
+#include <Wire.h>
+#include <Sensors.h>
+#include <Packet.h>
+
+#define htons(A) ((((uint16_t)(A) & 0xff00) >> 8) | (((uint16_t)(A) & 0x00ff) << 8))
+
+#define I2C_POWER_PIN 2
+#define DOOR_SWITCH_PIN 7
+
+int distanceTrigPin = 20;
+int distanceEchoPin = 21;
+
+// the channel configuration of the device
+uint16_t destAddress = 100;
+uint16_t myAddress = htons(200);
+uint16_t myPan = htons(1000);
+uint8_t myCh = 15;
+
+// generate the AT commands necesary to configure the device
+AtCommandRequest myRequest = AtCommandRequest( (uint8_t*)"MY", (uint8_t*)&myAddress, 2 );
+AtCommandRequest chRequest = AtCommandRequest( (uint8_t*)"CH", (uint8_t*)&myCh, 1);
+AtCommandRequest idRequest = AtCommandRequest( (uint8_t*)"ID", (uint8_t*)&myPan, 2);
+
+AtCommandRequest at_read_my = AtCommandRequest( (uint8_t*)"MY");
+AtCommandRequest at_read_ch = AtCommandRequest( (uint8_t*)"CH");
+AtCommandRequest at_read_id = AtCommandRequest( (uint8_t*)"ID");
+AtCommandRequest at_read_mm = AtCommandRequest( (uint8_t*)"MM");
+
+uint8_t payload[] = {'T', 'e', 's', 't', '\0', '\0', '\0', '\0'};   // The sending buffer
+
+// configuration for honeywell i2c communication
+int hih_addr = 0x27;
+
+XBee xbee = XBee();
+HIH61XX hih(hih_addr, I2C_POWER_PIN );
+Solar s(A0);
+Thermistor t(A1);
+DoorSwitch d(7);
+Distance dis(distanceTrigPin, distanceEchoPin); // trigPin: 20, echoPin: 21
+
+// interrupt variables
+boolean doorOpen = false;
+boolean doorChanged = false;
+
+// handler functions for each of the response
+void _handle_TX_Response(XBeeResponse response) {
+}
+
+void _handle_RX_Response(XBeeResponse response) {
+}
+
+void _handle_AT_Response(XBeeResponse response) {
+  Serial.println("handling AT command");
+  AtCommandResponse atResponse = AtCommandResponse();
+  response.getAtCommandResponse(atResponse);
+  if (atResponse.isOk()) {
+    Serial.print("Command [");
+    Serial.print((char)atResponse.getCommand()[0]);
+    Serial.print((char)atResponse.getCommand()[1]);
+    Serial.println("] was successful!");
+
+    if (atResponse.getValueLength() > 0) {
+      Serial.print("Command value length is ");
+      Serial.println(atResponse.getValueLength(), DEC);
+
+      Serial.print("Command value: ");
+
+      for (int i = 0; i < atResponse.getValueLength(); i++) {
+        Serial.print(atResponse.getValue()[i], HEX);
+        Serial.print(" ");
+      }
+
+      Serial.println("");
+    }
+  }
+}
+
+void readPacket() {
+  // wait 5 seconds for the status response
+  Serial.println("reading a packet.\n");
+  if ( xbee.readPacket(1000) ) {
+    Serial.println("Received the packet.");
+    XBeeResponse response = xbee.getResponse();
+    if ( response.getApiId() == TX_STATUS_RESPONSE ) {
+      _handle_TX_Response(response);
+    } else if ( response.getApiId() == RX_16_RESPONSE ) {
+      _handle_RX_Response(response);
+    } else if ( response.getApiId() == AT_COMMAND_RESPONSE ) {
+      _handle_AT_Response(response);
+    } else {
+      Serial.println("RX: unknown response: ");
+      Serial.println(response.getApiId());
+    }
+  } else if ( xbee.getResponse().isError() ) {
+    Serial.println("Error reading packet: ");
+    Serial.println(xbee.getResponse().getErrorCode());
+    Serial.println("\n");
+  }
+}
+
+void sendDistance(){
+  DistancePacket distancePacket = DistancePacket(dis.read(), destAddress);
+  Tx16Request req = distancePacket.getTx16Request();
+  xbee.send(req);
+}
+
+void sendHoney(){
+  Serial.print("Writing Honeywell packet...");
+
+  hih.start();
+  delay(1000);
+
+  hih.update();
+
+  HoneyHumiPacket humi = HoneyHumiPacket(hih.humidity(), destAddress);
+  HoneyTempPacket temp = HoneyTempPacket(hih.temperature(), destAddress);
+
+  Tx16Request humiReq = humi.getTx16Request();
+  Tx16Request tempReq = temp.getTx16Request();
+
+  xbee.send(humiReq);
+  xbee.send(tempReq);
+
+  hih.stop();
+
+  Serial.println("done!");
+}
+
+void sendSolar(){
+  Serial.print("Writing solar packet...");
+
+  SolarPacket pac = SolarPacket(s.read(), destAddress);
+  Tx16Request req = pac.getTx16Request();
+  xbee.send(req);
+
+  Serial.println("done!");
+}
+
+void sendThermistor(){
+  Serial.print("Writing thermistor packet...");
+
+  ThermistorPacket pac = ThermistorPacket(t.read(), destAddress);
+  Tx16Request req = pac.getTx16Request();
+  xbee.send(req);
+
+  Serial.println("done!");
+}
+
+void sendDoorSwitch(){
+  Serial.print("Writing door switch packet...");
+
+  Packet pack = Packet("DOOR", d.isOn(), destAddress);
+  Tx16Request req = pack.getTx16Request();
+  xbee.send(req);
+
+  Serial.println("done!");
+}
+
+void doorSwitchInterrupt(){
+  //Serial.println("Interrupt");
+  doorChanged = true;
+}
+
+void motionInterrupt(){
+}
+
+void setup(){
+  // configure serial communication
+  Serial.begin(9600);
+
+  // initialize i2c commuincation
+  Wire.begin();
+
+  // configure xbee communication
+  Serial1.begin(38400);
+
+  // enter API mode using custom AT command
+  Serial1.write("+++");
+  delay(1200);
+  Serial1.write("ATAP2\r");
+  Serial1.write("ATWR\r");
+  Serial1.write("ATCN\r");
+  // read out the shit generated by above AT command
+  while ( Serial1.available() ) {
+    Serial1.read();
+  }
+
+  xbee.setSerial(Serial1);
+
+  for (int i=0; i < 5; i ++){
+    Serial.print("Delay ");
+    Serial.print(i);
+    Serial.println(" of 5\n");
+    delay(1000);
+  }
+  // send off the generated requests
+  xbee.send(myRequest);
+  readPacket();
+
+  xbee.send(chRequest);
+  readPacket();
+
+  xbee.send(idRequest);
+  readPacket();
+
+  xbee.send(at_read_my);
+  readPacket();
+  xbee.send(at_read_ch);
+  readPacket();
+  xbee.send(at_read_id);
+  readPacket();
+  xbee.send(at_read_mm);
+  readPacket();
+
+  Serial.println("finish setup");
+
+  pinMode(A0, INPUT);
+  pinMode(A1, INPUT);
+  d.attachListener(doorSwitchInterrupt);
+  
+  //set up pin modes for Distance Sensor
+  pinMode(distanceTrigPin, OUTPUT);
+  pinMode(distanceEchoPin, INPUT);
+}
+
+void loop(){
+  sendHoney();
+  sendSolar();
+  sendThermistor();
+  //sendDistance();
+
+  if(doorChanged){
+    sendDoorSwitch();
+    doorChanged = false;
+  }
+
+  delay(3000);
+}
+
